@@ -35,8 +35,61 @@ async function socket_listener(data) {
 }
 
 export function dice_helper() {
+    log(feature_name, "[FFG Dice Helper] dice_helper() registering socket and click handlers");
     game.socket.on("module.ffg-star-wars-enhancements", socket_listener);
+    
+    // Use document-level event delegation for button clicks (works after page refresh)
+    $(document).off("click", ".effg-die-result"); // Remove any existing handlers
+    $(document).on("click", ".effg-die-result", async function (event) {
+        log(feature_name, "[FFG Dice Helper] Document-level click on .effg-die-result", { target: event.target, currentTarget: event.currentTarget });
+        event.preventDefault();
+        event.stopPropagation();
+        
+        // Find the message element that contains this button
+        let messageElement = $(this).closest(".message");
+        log(feature_name, "[FFG Dice Helper] messageElement from .closest('.message')", { length: messageElement.length, element: messageElement[0] });
+        
+        if (messageElement.length === 0) {
+            console.warn("[FFG Dice Helper] No .message ancestor found for button; click may be on detached or wrong DOM.");
+            return;
+        }
+        
+        // Get the message ID from the data attribute or message element
+        let messageId = messageElement.data("message-id") || messageElement.attr("data-message-id");
+        if (!messageId) {
+            // Try to get it from the message element's ID
+            let messageIdAttr = messageElement.attr("id");
+            if (messageIdAttr) {
+                messageId = messageIdAttr.replace("chat-message-", "");
+            }
+        }
+        log(feature_name, "[FFG Dice Helper] messageId", { messageId, messageElementId: messageElement.attr("id"), dataMessageId: messageElement.attr("data-message-id") });
+        
+        if (!messageId) {
+            console.warn("[FFG Dice Helper] Could not resolve messageId from message element.");
+            return;
+        }
+        
+        // Get the message document
+        let msg = game.messages.get(messageId);
+        log(feature_name, "[FFG Dice Helper] game.messages.get(messageId)", { messageId, msg: !!msg });
+        
+        if (!msg) {
+            console.warn("[FFG Dice Helper] No message in game.messages for id:", messageId);
+            return;
+        }
+        
+        // Create wrapper for dice_helper_clicked (v13: use .id if present)
+        let wrapper = {
+            message: msg,
+            _id: msg.id ?? msg._id
+        };
+        log(feature_name, "[FFG Dice Helper] Calling dice_helper_clicked from document handler");
+        await dice_helper_clicked(wrapper);
+    });
+    
     Hooks.on("createChatMessage", (messageData, meta_data, id) => {
+        log(feature_name, "[FFG Dice Helper] createChatMessage fired", { id, hasFlavor: !!messageData?.flavor, hasRolls: !!(messageData?.rolls?.length) });
         if (game.settings.get("ffg-star-wars-enhancements", "dice-helper")) {
             if (is_roll(messageData) === true) {
                 // as of some v10 version, chat messages can contain >1 roll. let's just read the first
@@ -97,6 +150,7 @@ export function dice_helper() {
                             "!</button>",
                     };
                     log(feature_name, "New message content: " + msg["content"]);
+                    log(feature_name, "[FFG Dice Helper] Sending helper button message via ChatMessage.create", { contentLength: msg.content?.length });
                     ChatMessage.create(msg);
                 }
             } else {
@@ -113,9 +167,24 @@ export function dice_helper() {
         we can probably overcome that, but it requires a bunch more work and who has time for that?!
          */
         if (game.settings.get("ffg-star-wars-enhancements", "dice-helper")) {
+            // Remove any existing handlers to prevent duplicates
+            html.off("click", ".effg-die-result");
+            
             // this would need to remain in renderchatmessage since we don't have easy access to the HTML later
-            html.on("click", ".effg-die-result", async function () {
-                await dice_helper_clicked(messageData);
+            html.on("click", ".effg-die-result", async function (event) {
+                // v13: messageData may have id (not _id) or nested message._id
+                const resolvedId = messageData?.id ?? messageData?._id ?? messageData?.message?._id;
+                log(feature_name, "[FFG Dice Helper] renderChatMessage handler: click on .effg-die-result", { messageDataId: messageData?.id, messageData_id: messageData?._id, message_message_id: messageData?.message?._id, resolvedId });
+                event.preventDefault();
+                event.stopPropagation();
+                
+                // messageData is the ChatMessage document; wrap with normalized id for v13
+                let wrapper = {
+                    message: messageData,
+                    _id: resolvedId
+                };
+                log(feature_name, "[FFG Dice Helper] Calling dice_helper_clicked from renderChatMessage handler");
+                await dice_helper_clicked(wrapper);
             });
         }
     });
@@ -148,6 +217,7 @@ async function dice_helper_clicked(object) {
      *
      * @param {object} ChatMessage object passed in by the hook we're listened to
      */
+    log(feature_name, "[FFG Dice Helper] dice_helper_clicked called", { hasObject: !!object, objectKeys: object ? Object.keys(object) : [] });
     log(feature_name, "Detected button click; converting to results");
 
     if (!game.user.isGM) {
@@ -158,22 +228,69 @@ async function dice_helper_clicked(object) {
         });
         return;
     }
-
-    var data = determine_data(object.message.content);
+    
+    // Try to determine the correct content path (v13: nested message.message.content)
+    let content = null;
+    
+    if (object?.message?.message?.content) {
+        content = object.message.message.content;
+    } else if (object?.message?.content) {
+        content = object.message.content;
+    } else if (object?.content) {
+        content = object.content;
+    } else if (object?.data?.content) {
+        content = object.data.content;
+    } else if (object?.toObject) {
+        let objData = object.toObject();
+        if (objData?.message?.content) {
+            content = objData.message.content;
+        } else if (objData?.content) {
+            content = objData.content;
+        }
+    }
+    log(feature_name, "[FFG Dice Helper] dice_helper_clicked content resolution", { hasContent: !!content, contentLength: content?.length });
+    
+    if (!content) {
+        console.warn("[FFG Dice Helper] dice_helper_clicked: no content found on object", object);
+        return;
+    }
+    
+    var data = determine_data(content);
     log(feature_name, JSON.stringify(data));
 
     let skill = data["skill"];
     let suggestions = await fetch_suggestions(data);
 
-    var msg = new ChatMessage(object.message);
+    // Get the actual ChatMessage document from the collection
+    // v13: document id can be .id or ._id; wrapper may have message.message._id
+    let msg = null;
+    let messageId = null;
+    
+    messageId = object?.message?.id ?? object?.message?._id ?? object?.message?.message?._id ?? object?._id ?? object?.id;
+    if (messageId) {
+        msg = game.messages.get(messageId);
+    }
+    if (!messageId) {
+        console.warn("[FFG Dice Helper] dice_helper_clicked: could not get messageId from object", object);
+        return;
+    }
+    log(feature_name, "[FFG Dice Helper] dice_helper_clicked message lookup", { messageId, foundMsg: !!msg });
+    
+    if (!msg) {
+        console.warn("[FFG Dice Helper] dice_helper_clicked: game.messages.get returned null for", messageId);
+        return;
+    }
+    
     let context = {
         suggestions: suggestions,
         skill: skill,
     };
-    object.message.content = (await getTemplate("modules/ffg-star-wars-enhancements/templates/dice_helper.html"))(
+    let newContent = (await getTemplate("modules/ffg-star-wars-enhancements/templates/dice_helper.html"))(
         context
     );
-    msg.update(object.message);
+    
+    // Update only the content field
+    await msg.update({ content: newContent });
     log(feature_name, "Updated the message");
 }
 
@@ -199,7 +316,7 @@ async function fetch_suggestions(results) {
     // categories suggestions can exist for
     let suggestion_categories = ["su", "fa", "ad", "th", "tr", "de"];
 
-    let skill = results["skill"].toLowerCase().replace("&", "&amp;").replace(" ", " ");
+    let skill = results["skill"].toLowerCase().replace(/&/g, "&amp;").replace(/\s+/g, " ").trim();
     let data = load_data();
 
     if (!is_supported_skill(skill, data)) {
@@ -240,7 +357,20 @@ function is_supported_skill(skill, data) {
      * returns true/false
      */
     log(feature_name, "Checking if " + skill + " has any helpers");
-    return skill in data;
+    let result = skill in data;
+    
+    // Try case-insensitive check as fallback
+    if (!result && data) {
+        const lowerSkill = skill.toLowerCase();
+        const matchingKey = Object.keys(data).find(key => key.toLowerCase() === lowerSkill);
+        if (matchingKey) {
+            // Update the data to use the correct key
+            data[skill] = data[matchingKey];
+            result = true;
+        }
+    }
+    
+    return result;
 }
 
 function load_data() {
@@ -284,7 +414,8 @@ function load_data() {
         // Let translate the skill names if possible
         Object.keys(jsondata).forEach((skillname) => {
             if (skillname.includes("SWFFG.")) {
-                let localizedskill = game.i18n.localize(skillname).toLowerCase().replace(" ", " ");
+                let localized = game.i18n.localize(skillname);
+                let localizedskill = localized.toLowerCase().replace(/\s+/g, " ").trim();
                 Object.defineProperty(jsondata, localizedskill, Object.getOwnPropertyDescriptor(jsondata, skillname));
                 delete jsondata[skillname];
             }
