@@ -164,7 +164,7 @@ function register_hooks() {
                 we may want to monkeypatch a different function in the future. this location doesn't seem to have access
                 to the actual weapon in use. I'm not sure if we actually care yet, but worth considering.
              */
-            if (!this.evaluated) {
+            if (!this._evaluated) {
                 try {
                     await this.evaluate();
                 } catch (e) {
