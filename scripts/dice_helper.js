@@ -191,24 +191,24 @@ export function dice_helper() {
 }
 
 function is_roll(message_data) {
-    if (game.user.isGM && message_data["rolls"].length > 0) {
-        if (message_data["flavor"] === undefined) {
-            return false;
-        }
-        return true;
-        if (
-            message_data.message.content.search("Initiative") === -1 ||
-            message_data.message.content.search(
-                game.i18n.localize("ffg-star-wars-enhancements.dice-helper-button-text")
-            ) === -1 ||
-            message_data.message.content.search(
-                game.i18n.localize("ffg-star-wars-enhancements.dice-helper-message-content-3")
-            ) === -1
-        ) {
-            return true;
-        }
+    if (!game.user.isGM || !(message_data["rolls"]?.length > 0)) {
+        return false;
     }
-    return false;
+    const flavor = message_data["flavor"];
+    if (flavor === undefined) {
+        return false;
+    }
+    // Initiative is not a check anyone spends advantage on, and the helper must not
+    // offer to help with its own output. Both the flavour and the content are
+    // searched: a createChatMessage payload carries no `message` property, which is
+    // why the original test never ran.
+    const haystack = `${flavor} ${message_data["content"] ?? ""}`;
+    const excluded = [
+        "Initiative",
+        game.i18n.localize("ffg-star-wars-enhancements.dice-helper-button-text"),
+        game.i18n.localize("ffg-star-wars-enhancements.dice-helper-message-content-3"),
+    ];
+    return !excluded.some((needle) => needle && haystack.includes(needle));
 }
 
 async function dice_helper_clicked(object) {
@@ -409,8 +409,11 @@ function load_data() {
     }
 
     try {
-        let data = journal_pages[0].text.content.replace("<p>", "").replace("</p>", "");
-        let jsondata = JSON.parse(data.replace('"', '"'));
+        let data = journal_pages[0].text.content.replaceAll("<p>", "").replaceAll("</p>", "");
+        // Saving the page in Foundry's editor escapes the JSON's quotes, after which
+        // JSON.parse fails and the feature reports invalid data. Decode &amp; last so
+        // an escaped entity is not decoded twice.
+        let jsondata = JSON.parse(data.replaceAll("&quot;", '"').replaceAll("&amp;", "&"));
         // Let translate the skill names if possible
         Object.keys(jsondata).forEach((skillname) => {
             if (skillname.includes("SWFFG.")) {

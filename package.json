@@ -4,6 +4,7 @@
     "description": "A collection of enhancements for the amazing FFG Star Wars system",
     "scripts": {
         "test": "echo \"Error: no test specified\" && exit 1",
+        "test:unit": "node --test \"tests/unit/**/*.test.mjs\"",
         "cypress:open": "cypress open"
     },
     "repository": {

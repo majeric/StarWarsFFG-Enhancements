@@ -415,7 +415,8 @@ export function build_talent_pills_html(talents) {
 
     for (const talent of talents) {
         const rankDisplay = talent.rank !== null ? ` ${talent.rank}` : "";
-        const talentDesc = talent.description
+        // A talent saved without a description arrives here as undefined.
+        const talentDesc = (talent.description ?? "")
             .replace(/&/g, "&amp;")
             .replace(/"/g, "&quot;")
             .replace(/</g, "&lt;")

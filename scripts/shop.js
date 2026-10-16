@@ -126,7 +126,7 @@ class Shop {
     async shop() {
         log(module_name, "Let's go shopping!");
         /* generate random number */
-        let generate_count = Math.floor(Math.random() * (this.max_items - this.min_items) + this.min_items);
+        let generate_count = Math.floor(Math.random() * (this.max_items - this.min_items + 1) + this.min_items);
         let possible_items_raw = [];
         /* build the raw item array */
         for (let i = 0; i < this.compendiums.length; i++) {
@@ -146,7 +146,7 @@ class Shop {
         let selected_items = [];
         while (selected_items.length < generate_count) {
             /* check to see if it's even possible to create items up to our desired amount */
-            if (possible_items_raw.length < selected_items) {
+            if (possible_items_raw.length === 0) {
                 log(
                     module_name,
                     "Unable to find sufficient items - aborting with " +
@@ -233,17 +233,23 @@ class Shop {
     RAW the check gets upgraded for every 10 above the first 10
      */
     rarity_to_difficulty(rarity) {
-        if (rarity <= 10) {
+        // A location modifier can push effective rarity below zero.
+        const effective = Math.max(0, rarity);
+        if (effective <= 10) {
             return {
-                difficulty: Math.floor(rarity / 2),
+                difficulty: Math.floor(effective / 2),
                 challenge: 0,
             };
-        } else {
-            return {
-                difficulty: 5 - (rarity % 10),
-                challenge: rarity % 10,
-            };
         }
+        // Past rarity 10 each further point upgrades one difficulty die to a
+        // challenge die. Taking the remainder instead went negative at 16 and
+        // wrapped at 20, where a rarity-20 item became easier to find than a
+        // rarity-19 one.
+        const upgrades = Math.min(effective - 10, 5);
+        return {
+            difficulty: 5 - upgrades,
+            challenge: upgrades,
+        };
     }
 
     /*
@@ -260,11 +266,17 @@ class Shop {
             var skill = actor.system.skills.Streetwise;
             var characteristic = actor.system.characteristics[skill.characteristic].value;
         }
+        // A skill check rolls max(characteristic, rank) dice, of which
+        // min(characteristic, rank) are upgraded. Seeding `proficiency` as well as
+        // `ability` rolled both halves, so a Presence 3 / Negotiation 2 shopper got
+        // five dice instead of three. `status` here was a leftover from the system's
+        // weapon-check helper; there is no weapon in an availability check, and in a
+        // browser it resolved to window.status, making the sum NaN and silently
+        // discarding the skill's own setback dice.
         let dicePool = new DicePoolFFG({
             ability: Math.max(characteristic, skill.rank),
-            proficiency: Math.min(characteristic, skill.rank),
             boost: skill.boost,
-            setback: skill.setback + status.setback,
+            setback: skill.setback,
             force: skill.force,
             advantage: skill.advantage,
             dark: skill.dark,
@@ -277,7 +289,7 @@ class Shop {
             difficulty: difficulty,
         });
 
-        dicePool.upgrade(Math.min(characteristic.value, skill.rank));
+        dicePool.upgrade(Math.min(characteristic, skill.rank));
         for (let i = 0; i < upgrades; i++) {
             dicePool.upgradeDifficulty();
         }

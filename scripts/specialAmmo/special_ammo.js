@@ -3,6 +3,9 @@ import { log_msg as log } from "../util.js";
 const MODULE_ID = "ffg-star-wars-enhancements";
 const FLAG_SPECIAL_AMMO = "special-ammo";
 const FLAG_AMMO_DATA = "ammo-data";
+// Set on the chat message once its shot has been paid for, so that redrawing the
+// message does not spend another round.
+const FLAG_AMMO_SPENT = "ammo-spent";
 
 const SETTING_ENABLE = "special-ammo-enable";
 const SETTING_AUTO_DEPLETE = "special-ammo-auto-deplete";
@@ -96,13 +99,18 @@ export function hooks() {
             newCurrent = 0;
             log("special_ammo", `Out of ammo for ${ammoItem.name}`);
         } else {
-            // Only decrement if this is our own roll (prevent other clients from decrementing too)
-            if (message.author?.id === game.user.id) {
+            // Only decrement if this is our own roll (prevent other clients from
+            // decrementing too), and only once per message. The ammo card is not part
+            // of the message document, so the DOM check above only catches a repeat
+            // within a single render -- every reload or scroll-back re-entered here and
+            // spent another round, draining magazines once per historical attack.
+            if (message.author?.id === game.user.id && !message.getFlag(MODULE_ID, FLAG_AMMO_SPENT)) {
                 newCurrent = ammoData.ammoCurrent - 1;
-                ammoItem.setFlag(MODULE_ID, FLAG_AMMO_DATA, {
+                await ammoItem.setFlag(MODULE_ID, FLAG_AMMO_DATA, {
                     ...ammoData,
                     ammoCurrent: newCurrent,
                 });
+                await message.setFlag(MODULE_ID, FLAG_AMMO_SPENT, true);
                 log("special_ammo", `Used 1 ammo from ${ammoItem.name}. Remaining: ${newCurrent}/${ammoData.ammoMax}`);
 
                 // Auto-deplete: if ammo reached 0, decrease item quantity and clear weapon selection
